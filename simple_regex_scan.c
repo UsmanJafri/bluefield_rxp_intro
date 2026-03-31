@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
     struct doca_regex_match *match = scan_res->matches;
     
     while (match) {
-        printf("Match rule_id: %d, value: %.*s\n", match->rule_id, match->length, data_buffer + match->match_start);
+        printf("Matched regex %d against data: %.*s\n", match->rule_id, match->length, data_buffer + match->match_start);
         match = match->next;
     }
 

@@ -18,12 +18,14 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 	Having different DOCA versions on Host and DPU is not recommended but in my experience it works fine.
 
 	Reason: the *pnet-emerald* servers are already set up with Ubuntu 24 while DOCA v2.2.1 only supports Ubuntu 22. To avoid wiping the host server, we opt for this split version set up.
----
+
 ## Table of content:
 - Section A - [Setting up the Host](#a)
 - Section B - [Setting up the DPU](#b)
-- Section C - [Enabling RXP engine](#b)
----
+- Section C - [Enabling RXP engine](#c)
+- Section D - [Compiling regular expressions](#d)
+- Section E - [Build and run the sample RXP matcher program](#e)
+
 ## A. Setting up the Host<a name="a"></a>
 
 1. Open up a Terminal and run the following commands to uninstall any previous versions of DOCA:
@@ -59,7 +61,7 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 	```sh
 	sudo reboot
 	```
----
+
 ## B. Setting up the DPU<a name="b"></a>
 
 1. Restart rshim service, to estabilish management connection to DPU.
@@ -81,25 +83,27 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 
 4. Install DOCA v2.2.1 on DPU. Replace `rshim0` based on Step 2.
 
+	Wait untill `Installation finished` message.
+	
 	```sh
 	sudo bfb-install --rshim rshim0 --bfb DOCA_2.2.1_BSP_4.2.2_Ubuntu_22.04-13.23-09.prod.bfb
 	```
 
-	Wait untill `Installation finished` message.
+5. Wait about 5 minutes for DPU to reboot.
 
-5. Wait about 5 minutes for DPU to reboot. Monitor the virtual console looking for `DPU is ready` message:
+	Monitor the virtual console looking for `DPU is ready` message:
 
 	```sh
 	sudo cat /dev/rshim0/misc
 	```
 
-6. Restart host side drivers:
+6. Restart host-side DPU drivers:
 
 	```sh
 	sudo /etc/init.d/openibd restart
 	```
 
-7. Assign IPs to DPU virtual port:
+7. Assign IPs to Host-side virtual port for DPU:
 
 	```sh
 	sudo ip addr add dev tmfifo_net0 192.168.100.1/30
@@ -107,7 +111,9 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 	sudo ip link set tmfifo_net0 up
 	```
 
-8. To forward internet access from Host server to DPU:
+8. To forward internet access from Host server to DPU do the following:
+
+ - **On the Host:**
 
 	a. Find the default gateway for Host server. On our server it was `eno12399np0`.
 	
@@ -115,7 +121,7 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 	ip route | grep default
 	```
 
-	Set up forwarding tables. Replace `eno12399np0` with your interface.
+	b, Set up forwarding tables. Replace `eno12399np0` with your interface based on the previous step.
 	```sh
 	sudo iptables -t nat -A POSTROUTING -o eno12399np0 -j MASQUERADE
 	
@@ -124,9 +130,33 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 	sudo iptables -A FORWARD -o tmfifo_net0 -j ACCEPT
 	```
 
+ - **On the DPU:**
+	
+	a. SSH into DPU first from host machine:
+	```sh
+	ssh ubuntu@192.168.100.2
+	```
+
+	b. Assign IPs to DPU-side virtual port for Host:
+	```sh
+	sudo /etc/init.d/openibd restart
+
+	sudo ip link set tmfifo_net0 up
+
+	sudo ip addr add 192.168.100.2/24 dev tmfifo_net0
+	```
+
+	c. Add default gateway and DNS:
+
+	```sh
+	sudo ip route add default via 192.168.100.1
+
+	echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+	```
+
 ## C. Enabling RXP engine<a name="c"></a>
 
-- On the DPU:
+- **On the DPU:**
 
 	```sh
 	sudo mst start
@@ -134,7 +164,7 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 	sudo systemctl start mlx-regex
 	```
 
-- On the Host:
+- **On the Host:**
 
 	1. Stop host side drivers:
 
@@ -142,7 +172,9 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 		sudo /etc/init.d/openibd stop
 		```
 
-	2. Set up huge pages. We are setting up 1024 huge pages of size 2 MB.
+	2. Set up huge pages.
+	
+		We are setting up 1024 huge pages of size 2 MB.
 
 		```sh
 		echo 1024 | sudo tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
@@ -170,9 +202,13 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 
 ## D. Compiling regular expressions<a name="d"></a>
 
+**Do the following on the DPU-side.** The Host side will not have the RXPC compiler as explained earlier...
+
 1. Setup DOCA paths in your environment:
 
 	```sh
+	ssh ubuntu@192.168.100.2
+
 	export PATH=$PATH:/opt/mellanox/doca/tools/:/opt/mellanox/grpc/bin
 	
 	export PKG_CONFIG_PATH=/opt/mellanox/doca/lib/aarch64-linux-gnu/pkgconfig:/opt/mellanox/flexio/lib/pkgconfig:/opt/mellanox/grpc/lib/pkgconfig:/opt/mellanox/dpdk/lib/aarch64-linux-gnu/pkgconfig
@@ -201,14 +237,42 @@ This is a brief guide on setting up the BlueField 3 DPU for regular expression m
 	rxpc -V bf3 -f my_regexes.txt -o build_regexes/build_regexes
 	```
 
-## E. Building a simple RXP matcher program<a name="e"></a>
+## E. Build and run the sample RXP matcher program<a name="e"></a>
 
-I am using a slightly modified version of the `meson` build script from NVIDA code.
+1. I am using a slightly modified version of the `meson` build script from NVIDA code. This will build the `simple_regex_scan.c` application.
 
-```sh
-rm -rf build
+	```sh
+	rm -rf build
 
-meson build
+	meson build
 
-ninja -C build
-```
+	ninja -C build
+	```
+
+2. Get PCI device ID for the DPU. Look for `domain:bus:dev.fn=<ID here>`. In my case it was: `0000:0d:00.0`
+	
+	```sh
+	sudo mst start
+
+	sudo mst status
+	```
+
+3. Run the regex scan application.
+	
+	Replace `0000:0d:00.0` based on previous stepp.
+	
+	Replace `data.txt` with a file containing the data you want to scan against the regular expressions in `my_regexes.txt`.
+
+	```sh
+	sudo build/simple_regex_scan -p 0000:0d:00.0 -r build_regexes/build_regexes.rof2.binary -d data.txt
+	```
+
+4. You should see some some matches printed out on the console!
+
+	```
+	Matched regex 2 against data: num_car:5
+	Matched regex 1 against data: ct
+	Matched regex 1 against data: caaaat
+	Matched regex 3 against data: purdue
+	Matched regex 3 against data: puuuuuurdue
+	```
